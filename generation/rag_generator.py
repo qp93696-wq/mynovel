@@ -30,7 +30,7 @@ class RAGNovelGenerator:
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2-1.5B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-3B-Instruct",
         knowledge_base: Optional[NovelKnowledgeBase] = None,
         device: str = None,
         max_history: int = 10  # 最大历史记录数
@@ -56,8 +56,27 @@ class RAGNovelGenerator:
         self._load_model()
     
     def _load_model(self):
-        """加载生成模型"""
+        """加载生成模型"""   
+        import os
+
+        if self.model_name == "Qwen/Qwen2.5-3B-Instruct":
+            local_path = "./models/transformers_cache/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1"
+            if os.path.exists(local_path):
+                self.model_name = local_path
+                os.environ['TRANSFORMERS_OFFLINE'] = '1'
         logger.info(f"加载生成模型: {self.model_name}")
+        
+        if "Qwen2.5" in self.model_name and os.path.isdir(self.model_name):
+            config_path = os.path.join(self.model_name, "config.json")
+            if os.path.exists(config_path):
+                import json
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                if 'model_type' not in config:
+                    config['model_type'] = 'qwen2'
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json.dump(config, f, ensure_ascii=False, indent=2)
+                        logger.info("已自动修复模型配置")
         
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,

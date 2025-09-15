@@ -16,7 +16,7 @@ class EmbeddingModel:
     def __init__(self,
                 model_name: str = "BAAI/bge-small-zh-v1.5",
                 device: str = None,
-                use_compile: bool = None,  # 是否使用torch.compile
+                use_compile: bool = False,  # 是否使用torch.compile
                 compile_mode: str = "reduce-overhead" 
                 ):
         """

@@ -75,6 +75,26 @@ class ModelLoader:
     
     def load_model(self):
         """加载Qwen2.5模型和分词器"""
+
+        import os
+    
+        # 检查本地缓存
+        if "Qwen2.5-3B-Instruct" in self.model_name_or_path:
+            # 构建本地路径
+            local_path = os.path.join(
+                self.cache_dir,
+                "models--Qwen--Qwen2.5-3B-Instruct",
+                "snapshots",
+                "aa8e72537993ba99e69dfaafa59ed015b17504d1"
+            )
+            
+            # 检查路径是否存在
+            if os.path.exists(local_path):
+                logger.info(f"发现本地模型，使用: {local_path}")
+                self.model_name_or_path = local_path
+                # 设置离线模式
+                os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                os.environ['HF_DATASETS_OFFLINE'] = '1'
         logger.info(f"正在加载模型: {self.model_name_or_path}")
         logger.info(f"设备: {self.device}, 数据类型: {self.dtype}")
         

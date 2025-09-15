@@ -1,0 +1,59 @@
+/data/
+/datasets/
+*.csv
+*.json
+*.jsonl
+*.parquet
+*.arrow
+*.tfrecord
+*.rec
+*.idx
+outputs/
+.idea/
+.vscode/
+cache/
+# 模型权重和检查点
+/models/
+/checkpoints/
+/saved_models/
+*.pt
+*.pth
+*.bin
+*.pb
+*.h5
+*.hdf5
+*.onnx
+output.txt
+# 实验输出和结果
+/outputs/
+/results/
+
+# Python 虚拟环境
+/venv/
+/env/
+/.venv/
+/.env/
+
+# Python 缓存和编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 包管理和分发
+/.eggs/
+*.egg-info/
+/dist/
+/build/
+*.whl
+
+# 日志文件
+*.log
+/logs/
+/log/
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+
