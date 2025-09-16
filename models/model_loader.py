@@ -23,7 +23,7 @@ class ModelLoader:
         load_in_8bit: bool = False,
         load_in_4bit: bool = False,
         trust_remote_code: bool = True,
-        use_flash_attention: bool = False,
+        attn_implementation: Optional[str] = None,
         max_memory: Optional[Dict[int, str]] = None,
         cache_dir: Optional[str] = "./models/transformers_cache",
         verbose: bool = False
@@ -38,7 +38,7 @@ class ModelLoader:
             load_in_8bit: 是否使用8位量化加载
             load_in_4bit: 是否使用4位量化加载
             trust_remote_code: 是否信任远程代码
-            use_flash_attention: 是否使用Flash Attention
+            attn_implementation: 是否使用Flash Attention
             max_memory: GPU内存分配字典
             cache_dir: 模型缓存目录
             verbose: 是否输出详细信息
@@ -46,7 +46,7 @@ class ModelLoader:
         self.model_name_or_path = model_name_or_path
         self.cache_dir = cache_dir
         self.trust_remote_code = trust_remote_code
-        self.use_flash_attention = use_flash_attention
+        self.attn_implementation = attn_implementation
         self.verbose = verbose
         
         # 设备配置
@@ -127,9 +127,9 @@ class ModelLoader:
                 logger.info("使用4位量化加载模型")
             
             # Flash Attention配置
-            if self.use_flash_attention:
-                model_kwargs["attn_implementation"] = "flash_attention_2"
-                logger.info("使用Flash Attention 2")
+            if self.attn_implementation:
+                model_kwargs["attn_implementation"] = self.attn_implementation
+                logger.info(f"使用Attention实现: {self.attn_implementation}")
             
             # 内存配置
             if self.max_memory:

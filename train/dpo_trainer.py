@@ -23,7 +23,7 @@ class DPOTrainer:
         # 加载模型和分词器
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto",
             load_in_4bit=getattr(config, 'use_4bit', False),
             quantization_config=BitsAndBytesConfig(

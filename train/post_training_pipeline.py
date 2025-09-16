@@ -73,7 +73,7 @@ class PostTrainingConfig:
     # 数据配置
     novel_data_dir: str = "./data/novels"
     styles: List[str] = field(default_factory=lambda: ["仙侠", "武侠", "玄幻"])
-    max_samples_per_style: int = 1000
+    max_samples_per_style: int = 100
     data_augment_ratio: float = 0.3
     use_context: bool = True  # 使用上下文
     context_length: int = 200
@@ -81,19 +81,19 @@ class PostTrainingConfig:
     # SFT配置
     sft_enabled: bool = True
     sft_epochs: int = 3
-    sft_batch_size: int = 4
-    sft_learning_rate: float = 5e-5
+    sft_batch_size: int = 1
+    sft_learning_rate: float = 2e-4
     sft_use_lora: bool = True
-    sft_lora_r: int = 16
-    sft_lora_alpha: int = 32
+    sft_lora_r: int = 8
+    sft_lora_alpha: int = 16
     
     # DPO配置
     dpo_enabled: bool = True
     dpo_epochs: int = 2
-    dpo_batch_size: int = 2
+    dpo_batch_size: int = 1
     dpo_learning_rate: float = 1e-6
     dpo_beta: float = 0.1
-    dpo_num_candidates: int = 4  # 每个prompt生成的候选数
+    dpo_num_candidates: int = 2  # 每个prompt生成的候选数
     
     # 评估配置
     eval_enabled: bool = True
@@ -179,7 +179,7 @@ class ModelEvaluator:
             # 加载模型
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                torch_dtype=torch.float16 if config.fp16 else torch.float32,
+                dtype=torch.float16 if config.fp16 else torch.float32,
                 device_map="auto"
             )
             self.tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -283,7 +283,7 @@ def create_preference_data_from_sft(
         logger.info(f"加载SFT模型: {sft_model_path}")
         sft_model = AutoModelForCausalLM.from_pretrained(
             sft_model_path,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto"
         )
         sft_tokenizer = AutoTokenizer.from_pretrained(sft_model_path)
@@ -294,7 +294,7 @@ def create_preference_data_from_sft(
         logger.info(f"加载基础模型: {base_model_path}")
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_path,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto"
         )
         base_tokenizer = AutoTokenizer.from_pretrained(base_model_path)
@@ -525,7 +525,23 @@ class PostTrainingPipeline:
             },
             "augmentation_params": {
                 "augment_ratio": self.config.data_augment_ratio
+            },
+            "quality_criteria": {  # 添加这个部分
+            "min_length": 50,
+            "max_length": 2000,
+            "min_punctuation_ratio": 0.03,
+            "max_punctuation_ratio": 0.15,
+            "preferred_sentence_length": [10, 50],
+            "quality_weights": {
+                "length": 0.2,
+                "punctuation": 0.15,
+                "dialogue": 0.15,
+                "keywords": 0.2,
+                "sentence_variety": 0.15,
+                "repetition": 0.15
             }
+            },
+        "style_templates": {}  # 添加空的风格模板
         }
         
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -645,6 +661,12 @@ class PostTrainingPipeline:
     
     def _run_sft(self) -> str:
         """运行SFT训练"""
+        import os
+    
+        # 设置离线模式
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+        os.environ['HF_DATASETS_OFFLINE'] = '1'
+
         sft_dir = self.config.experiment_dir / "sft"
         sft_dir.mkdir(exist_ok=True)
         
@@ -666,7 +688,7 @@ class PostTrainingPipeline:
         val_examples = [TrainingExample(**d) for d in val_data]
         
         # 创建SFT配置
-        from src.config.config import SystemConfig
+        '''from src.config.config import SystemConfig
         sys_config = SystemConfig()
         sys_config.model.base_model = self.config.base_model
         sys_config.training.output_dir = str(sft_dir)
@@ -674,8 +696,37 @@ class PostTrainingPipeline:
         sys_config.training.per_device_train_batch_size = self.config.sft_batch_size
         sys_config.training.learning_rate = self.config.sft_learning_rate
         sys_config.lora.r = self.config.sft_lora_r
-        sys_config.lora.lora_alpha = self.config.sft_lora_alpha
+        sys_config.lora.lora_alpha = self.config.sft_lora_alpha'''
         
+        from src.config.config import SystemConfig, ModelConfig, TrainingConfig
+        logger.info("正在应用强制显存优化设置...")
+
+        sys_config = SystemConfig()
+        
+        # 1. 强制模型以 4-bit 量化加载
+        sys_config.model = ModelConfig(
+            model_name_or_path=self.config.base_model,
+            load_in_4bit=True,
+            trust_remote_code=True
+        )
+        logger.info("已强制启用 4-bit 模型量化。")
+
+        # 2. 强制使用极小的批次大小和大的梯度累积
+        sys_config.training = TrainingConfig(
+            output_dir=str(sft_dir),
+            num_train_epochs=self.config.sft_epochs,
+            per_device_train_batch_size=1,  # 强制批次大小为 1
+            gradient_accumulation_steps=16, # 强制梯度累积为 16 (有效批次大小仍为16)
+            learning_rate=self.config.sft_learning_rate,
+            fp16=True,
+            gradient_checkpointing=True, # 确保梯度检查点开启
+            optim="paged_adamw_8bit"     # 使用节省显存的优化器
+        )
+        logger.info("已强制设置 batch_size=1, gradient_accumulation_steps=16。")
+
+         #  LoRA 配置 
+        sys_config.lora.r = self.config.sft_lora_r
+        sys_config.lora.lora_alpha = self.config.sft_lora_alpha
         # 创建训练器
         trainer = SFTTrainer(sys_config)
         trainer.setup_model_and_tokenizer()

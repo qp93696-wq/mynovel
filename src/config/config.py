@@ -15,18 +15,22 @@ class ModelConfig:
     model_name_or_path: str = "Qwen/Qwen2.5-3B-Instruct"
     cache_dir: str = "./models/transformers_cache"
     
+    # 添加本地模型路径配置
+    local_model_path: Optional[str] = "D:/Project/novel/models/transformers_cache/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1"
+    use_local: bool = True
+
     # 设备和精度配置
     device: Optional[str] = None  # None表示自动选择，可选: "cuda", "cpu", "mps"
     dtype: Optional[str] = None  # None表示自动选择，可选: "float16", "bfloat16", "float32"
     
     # 量化配置
-    load_in_4bit: bool = False  # 4位量化（需要bitsandbytes）
+    load_in_4bit: bool = True  # 4位量化（需要bitsandbytes）
     load_in_8bit: bool = False  # 8位量化（需要bitsandbytes）
     
     # 模型加载配置
     trust_remote_code: bool = True
-    use_flash_attention: bool = False  # 使用Flash Attention 2（需要flash-attn）
-    max_memory: Optional[Dict[int, str]] = None  # GPU内存分配，如 {0: "10GB", 1: "10GB"}
+    attn_implementation: Optional[str] = None  # 使用Flash Attention 2（需要flash-attn）
+    max_memory: Optional[Dict[int, str]] = field(default_factory=lambda: {0: "7GB"})  # GPU内存分配，如 {0: "10GB", 1: "10GB"}
     
     # 其他配置
     verbose: bool = False
@@ -51,15 +55,15 @@ class TrainingConfig:
     """训练配置"""
     output_dir: str = "./outputs"
     num_train_epochs: int = 3
-    per_device_train_batch_size: int = 2
-    per_device_eval_batch_size: int = 4
-    gradient_accumulation_steps: int = 8
+    per_device_train_batch_size: int = 1
+    per_device_eval_batch_size: int = 1
+    gradient_accumulation_steps: int = 16
     learning_rate: float = 2e-4
-    warmup_steps: int = 100
+    warmup_steps: int = 50
     logging_steps: int = 10
-    save_steps: int = 500
-    eval_steps: int = 100
-    save_total_limit: int = 3
+    save_steps: int = 1000
+    eval_steps: int = 1000
+    save_total_limit: int = 1
     load_best_model_at_end: bool = True
     metric_for_best_model: str = "eval_loss"
     greater_is_better: bool = False
@@ -71,7 +75,7 @@ class TrainingConfig:
     
     # 添加训练相关的额外配置
     max_grad_norm: float = 1.0
-    dataloader_num_workers: int = 4
+    dataloader_num_workers: int = 0
     remove_unused_columns: bool = False
     label_smoothing_factor: float = 0.0
     report_to: List[str] = field(default_factory=lambda: ["tensorboard"])
@@ -81,8 +85,8 @@ class TrainingConfig:
 @dataclass
 class LoRAConfig:
     """LoRA配置 - 针对Qwen2.5模型优化"""
-    r: int = 16  # LoRA秩
-    lora_alpha: int = 32  # LoRA缩放参数
+    r: int = 8  # LoRA秩
+    lora_alpha: int = 16  # LoRA缩放参数
     target_modules: List[str] = field(default_factory=lambda: [
         "q_proj", "k_proj", "v_proj", "o_proj",  # 注意力层
         "gate_proj", "up_proj", "down_proj"  # MLP层
@@ -309,11 +313,12 @@ class SystemConfig:
             'load_in_8bit': self.model.load_in_8bit,
             'load_in_4bit': self.model.load_in_4bit,
             'trust_remote_code': self.model.trust_remote_code,
-            'use_flash_attention': self.model.use_flash_attention,
+            'attn_implementation': self.model.attn_implementation,
             'max_memory': self.model.max_memory,
             'cache_dir': self.model.cache_dir,
             'verbose': self.model.verbose
         }
+        
     
     def get_generation_kwargs(self) -> dict:
         """获取生成参数"""

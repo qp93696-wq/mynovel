@@ -112,14 +112,14 @@ class RAGNovelGenerator:
                 logger.warning(f"4bit量化失败: {e}, 尝试普通加载")
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
-                    torch_dtype=torch.float16,
+                    dtype=torch.float16,
                     device_map="auto",
                     trust_remote_code=True
                 )
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.float32,
+                dtype=torch.float32,
                 trust_remote_code=True
             ).to(self.device)
         

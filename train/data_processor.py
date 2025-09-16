@@ -345,12 +345,24 @@ class ImprovedDataProcessor:
     def _evaluate_text_quality_rules(self, text: str, style: str) -> float:
         """基于规则的文本质量评估"""
         scores = {}
-        weights = self.config.quality_criteria.get("quality_weights", {})
+        # 安全获取配置，提供默认值
+        quality_criteria = self.config.quality_criteria
+        if isinstance(quality_criteria, dict):
+            weights = quality_criteria.get("quality_weights", {})
+            min_len = quality_criteria.get("min_length", 50)  # 添加默认值
+            max_len = quality_criteria.get("max_length", 2000)  # 添加默认值
+            min_punct = quality_criteria.get("min_punctuation_ratio", 0.03)
+            max_punct = quality_criteria.get("max_punctuation_ratio", 0.15)
+        else:
+            # 如果不是字典，使用默认值
+            weights = {}
+            min_len = 50
+            max_len = 2000
+            min_punct = 0.03
+            max_punct = 0.15
         
         # 长度评分
         length = len(text)
-        min_len = self.config.quality_criteria["min_length"]
-        max_len = self.config.quality_criteria["max_length"]
         
         if length < min_len:
             scores["length"] = 0.3
@@ -617,65 +629,65 @@ class ImprovedDataProcessor:
 
     # 在 ImprovedDataProcessor 类中添加（约第600行后）
 
-def process_novels_parallel(
-    self,
-    novel_paths: List[str],
-    styles: Union[str, List[str], Dict[str, str]],
-    max_workers: Optional[int] = None,
-    max_samples_per_novel: Optional[int] = None
-) -> List[TrainingExample]:
-    """
-    并行处理多个小说文件
-    
-    Args:
-        novel_paths: 小说文件路径列表
-        styles: 风格（字符串、列表或路径到风格的映射）
-        max_workers: 最大工作线程数
-        max_samples_per_novel: 每本小说的最大样本数
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    # 处理风格参数
-    if isinstance(styles, str):
-        style_map = {path: styles for path in novel_paths}
-    elif isinstance(styles, list):
-        style_map = dict(zip(novel_paths, styles))
-    else:
-        style_map = styles
-    
-    # 设置工作线程数
-    max_workers = max_workers or self.config.processing_params.get("parallel_workers", 4)
-    
-    all_examples = []
-    
-    # 使用线程池并行处理
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务
-        future_to_novel = {
-            executor.submit(
-                self.process_novel_to_training_data,
-                novel_path,
-                style_map.get(novel_path, "玄幻"),
-                max_samples_per_novel
-            ): novel_path
-            for novel_path in novel_paths
-        }
+    def process_novels_parallel(
+        self,
+        novel_paths: List[str],
+        styles: Union[str, List[str], Dict[str, str]],
+        max_workers: Optional[int] = None,
+        max_samples_per_novel: Optional[int] = None
+    ) -> List[TrainingExample]:
+        """
+        并行处理多个小说文件
         
-        # 显示进度条
-        with tqdm(total=len(novel_paths), desc="处理小说") as pbar:
-            for future in as_completed(future_to_novel):
-                novel_path = future_to_novel[future]
-                try:
-                    examples = future.result()
-                    all_examples.extend(examples)
-                    logger.info(f"成功处理: {Path(novel_path).stem}, 获得 {len(examples)} 个样本")
-                except Exception as e:
-                    logger.error(f"处理失败 {novel_path}: {e}")
-                finally:
-                    pbar.update(1)
-    
-    logger.success(f"并行处理完成，共获得 {len(all_examples)} 个训练样本")
-    return all_examples
+        Args:
+            novel_paths: 小说文件路径列表
+            styles: 风格（字符串、列表或路径到风格的映射）
+            max_workers: 最大工作线程数
+            max_samples_per_novel: 每本小说的最大样本数
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        # 处理风格参数
+        if isinstance(styles, str):
+            style_map = {path: styles for path in novel_paths}
+        elif isinstance(styles, list):
+            style_map = dict(zip(novel_paths, styles))
+        else:
+            style_map = styles
+        
+        # 设置工作线程数
+        max_workers = max_workers or self.config.processing_params.get("parallel_workers", 4)
+        
+        all_examples = []
+        
+        # 使用线程池并行处理
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_novel = {
+                executor.submit(
+                    self.process_novel_to_training_data,
+                    novel_path,
+                    style_map.get(novel_path, "玄幻"),
+                    max_samples_per_novel
+                ): novel_path
+                for novel_path in novel_paths
+            }
+            
+            # 显示进度条
+            with tqdm(total=len(novel_paths), desc="处理小说") as pbar:
+                for future in as_completed(future_to_novel):
+                    novel_path = future_to_novel[future]
+                    try:
+                        examples = future.result()
+                        all_examples.extend(examples)
+                        logger.info(f"成功处理: {Path(novel_path).stem}, 获得 {len(examples)} 个样本")
+                    except Exception as e:
+                        logger.error(f"处理失败 {novel_path}: {e}")
+                    finally:
+                        pbar.update(1)
+        
+        logger.success(f"并行处理完成，共获得 {len(all_examples)} 个训练样本")
+        return all_examples
 
     def _has_repetition(self, text: str, threshold: int = 3) -> bool:
         """检测文本是否有过多重复"""
