@@ -12,6 +12,7 @@ from loguru import logger
 
 from rag.knowledge_base import NovelKnowledgeBase
 from generation.rag_generator import RAGNovelGenerator
+from generation.novel_generator import EnhancedNovelGenerator
 from train.post_training_pipeline import PostTrainingConfig, PostTrainingPipeline
 
 
@@ -263,21 +264,32 @@ class NovelRAGApp:
             embedding_model_name="BAAI/bge-small-zh-v1.5",
             vector_store_path="./data/vector_store/novels"
         )
-        
-        # 生成器
-        self.generator = RAGNovelGenerator(
-            model_name="Qwen/Qwen2.5-3B-Instruct",
+    
+    def get_generator(self, model_name: str) -> RAGNovelGenerator:
+        """根据模型名称获取或创建生成器实例"""
+        # 这里可以加入缓存机制，避免重复加载
+        return RAGNovelGenerator(
+            model_name=model_name,
             knowledge_base=self.knowledge_base
+        )
+    
+    def get_long_novel_generator(self, model_name: str, style: str, use_rag: bool, enable_reflection: bool) -> EnhancedNovelGenerator:
+        """获取或创建长篇小说生成器"""
+        return EnhancedNovelGenerator(
+            model_path=model_name,
+            style=style,
+            use_rag=use_rag,
+            enable_reflection=enable_reflection
         )
     
     def build_interface(self) -> gr.Blocks:
         """构建Gradio界面"""
         
-        with gr.Blocks(title="Novel-RAG 小说生成系统", theme=gr.themes.Soft()) as app:
+        with gr.Blocks(title="小说生成系统", theme=gr.themes.Soft()) as app:
             gr.Markdown("""
-            # 🎭 Novel-RAG 智能小说生成系统
+            # 🎭 智能小说生成系统
             
-            基于RAG技术的小说生成系统，支持多种风格、知识库管理和模型训练。
+            支持多种风格、知识库管理和模型训练。
             """)
             
             with gr.Tabs():
@@ -291,15 +303,16 @@ class NovelRAGApp:
                                 label="基础模型",
                                 choices=[
                                     "Qwen/Qwen2-1.5B-Instruct",
-                                    "Qwen/Qwen2.5-3B-Instruct"
+                                    "Qwen/Qwen2.5-3B-Instruct",
+                                    "Qwen/Qwen2.5-0.5B-Instruct"
                                 ],
-                                value="Qwen/Qwen2.5-3B-Instruct"
+                                value="Qwen/Qwen2-1.5B-Instruct"
                             )
                             
                             train_styles = gr.CheckboxGroup(
                                 label="训练风格",
                                 choices=["仙侠", "武侠", "玄幻", "都市", "科幻"],
-                                value=["仙侠", "武侠", "玄幻"]
+                                value=[]
                             )
                             
                             with gr.Row():
@@ -307,8 +320,8 @@ class NovelRAGApp:
                                 dpo_epochs = gr.Number(label="DPO轮数", value=2)
                             
                             with gr.Row():
-                                lora_r = gr.Number(label="LoRA秩", value=16)
-                                lora_alpha = gr.Number(label="LoRA Alpha", value=32)
+                                lora_r = gr.Number(label="LoRA秩", value=8)
+                                lora_alpha = gr.Number(label="LoRA Alpha", value=16)
                             
                             do_sft = gr.Checkbox(label="执行SFT训练", value=True)
                             do_dpo = gr.Checkbox(label="执行DPO训练", value=True)
@@ -365,6 +378,14 @@ class NovelRAGApp:
                 with gr.Tab("📝 小说生成"):
                     with gr.Row():
                         with gr.Column(scale=1):
+                            generate_model = gr.Dropdown(
+                                label="生成模型",
+                                choices=[
+                                "Qwen/Qwen2-1.5B-Instruct",
+                                "Qwen/Qwen2.5-3B-Instruct"
+                            ],
+                            value="Qwen/Qwen2-1.5B-Instruct"
+                        )
                             generate_prompt = gr.Textbox(
                                 label="创作提示",
                                 placeholder="输入你的创作需求，如：写一段主角突破境界的场景",
@@ -448,6 +469,14 @@ class NovelRAGApp:
                         with gr.Column(scale=1):
                             gr.Markdown("### 长篇小说设置")
                             
+                            long_novel_model = gr.Dropdown(
+                            label="生成模型",
+                            choices=[
+                                "Qwen/Qwen2-1.5B-Instruct",
+                                "Qwen/Qwen2.5-3B-Instruct"
+                            ],
+                            value="Qwen/Qwen2-1.5B-Instruct"
+                            )
                             long_novel_title = gr.Textbox(
                                 label="小说标题",
                                 placeholder="输入小说名称，如：凡人修仙传",
@@ -650,15 +679,22 @@ class NovelRAGApp:
          batch_prompts, batch_style, batch_generate_btn, batch_results,
          export_btn) = components
         
-        # 生成事件
-        generate_btn.click(
+        # 短篇生成事件
+        '''generate_btn.click(
             fn=self.generate_novel,
-            inputs=[generate_prompt, generate_style, use_rag,
-                   max_tokens, temperature, top_p],
+            inputs=[generate_model,
+                    generate_prompt, 
+                    generate_style, 
+                    use_rag,
+                    max_tokens,
+                    temperature, 
+                    top_p
+                ],
             outputs=generated_text
-        )
+        )'''
 
 
+    
 
         # 清空按钮
         clear_btn.click(
@@ -714,6 +750,7 @@ class NovelRAGApp:
     
     def generate_novel(
         self,
+        model_name: str,
         prompt: str,
         style: str,
         use_rag: bool,
@@ -723,7 +760,8 @@ class NovelRAGApp:
     ) -> str:
         """生成小说"""
         try:
-            generated = self.generator.generate(
+            generator = self.get_generator(model_name)
+            generated = generator.generate(
                 prompt=prompt,
                 style=style,
                 use_rag=use_rag,
@@ -736,6 +774,55 @@ class NovelRAGApp:
             logger.error(f"生成失败: {e}")
             return f"生成失败: {str(e)}"
     
+    '''def start_long_novel_generation(
+        self,
+        model_name: str, # <--- 接收模型名称
+        title: str,
+        style: str,
+        target_words: int,
+        use_rag: bool,
+        enable_reflection: bool,
+        auto_save_interval: int,
+        quality_threshold: float,
+        progress=gr.Progress()
+    ):
+        """开始长篇小说生成"""
+        try:
+            import threading
+
+            if self.generation_running:
+                return "已有生成任务正在运行", "", "", 0, 0, 0.0
+
+            # 动态创建长篇小说生成器
+            self.long_novel_generator = self.get_long_novel_generator(
+                model_name=model_name,
+                style=style,
+                use_rag=use_rag,
+                enable_reflection=enable_reflection
+            )
+            
+            # ... (后续代码与原 start_long_novel_generation 类似)
+            # 设置配置
+            self.long_novel_generator.config['auto_save_interval'] = auto_save_interval
+            self.long_novel_generator.config['quality_threshold'] = quality_threshold
+
+            # 创建生成线程
+            def generate_with_progress():
+                # ... (线程内代码不变)
+            
+            self.generation_thread = threading.Thread(target=generate_with_progress)
+            self.generation_thread.start()
+
+            return (
+                f"开始生成《{title}》...",
+                f"输出目录：{self.long_novel_generator.output_dir}",
+                "", 0, 0, 0.0
+            )
+
+        except Exception as e:
+            logger.error(f"启动生成失败: {e}")
+            return f"错误: {str(e)}", "", "", 0, 0, 0.0'''
+        
     def save_generated(self, text: str, style: str) -> str:
         """保存生成的内容"""
         try:

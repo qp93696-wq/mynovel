@@ -30,7 +30,7 @@ class RAGNovelGenerator:
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-3B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
         knowledge_base: Optional[NovelKnowledgeBase] = None,
         device: str = None,
         max_history: int = 10  # 最大历史记录数
@@ -59,11 +59,12 @@ class RAGNovelGenerator:
         """加载生成模型"""   
         import os
 
-        if self.model_name == "Qwen/Qwen2.5-3B-Instruct":
+        '''if self.model_name == "Qwen/Qwen2.5-3B-Instruct":
             local_path = "./models/transformers_cache/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1"
             if os.path.exists(local_path):
                 self.model_name = local_path
                 os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                '''
         logger.info(f"加载生成模型: {self.model_name}")
         
         if "Qwen2.5" in self.model_name and os.path.isdir(self.model_name):
@@ -120,7 +121,7 @@ class RAGNovelGenerator:
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 dtype=torch.float32,
-                trust_remote_code=True
+                trust_remote_code=True,
             ).to(self.device)
         
         self.model.eval()

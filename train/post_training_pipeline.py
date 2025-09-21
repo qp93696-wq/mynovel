@@ -18,128 +18,7 @@ from loguru import logger
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 
-
-# ========================================
-# 配置类定义
-# ========================================
-
-@dataclass
-class SFTConfig:
-    """SFT训练配置"""
-    model_name: str
-    train_data_path: str
-    val_data_path: str
-    output_dir: str
-    use_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
-    num_epochs: int = 3
-    batch_size: int = 4
-    learning_rate: float = 5e-5
-    fp16: bool = True
-    gradient_checkpointing: bool = True
-    seed: int = 42
-    use_wandb: bool = False
-    wandb_project: str = "novel-sft"
-
-
-@dataclass
-class DPOConfig:
-    """DPO训练配置"""
-    model_name: str
-    ref_model_name: str
-    train_data_path: str
-    val_data_path: str
-    output_dir: str
-    beta: float = 0.1
-    num_epochs: int = 2
-    batch_size: int = 2
-    learning_rate: float = 1e-6
-    fp16: bool = True
-    gradient_checkpointing: bool = True
-    seed: int = 42
-    use_wandb: bool = False
-    wandb_project: str = "novel-dpo"
-
-
-@dataclass
-class PostTrainingConfig:
-    """后训练完整配置"""
-    # 基础配置
-    project_name: str = "novel_rag_post_training"
-    base_model: str = "Qwen/Qwen2.5-3B-Instruct"
-    output_dir: str = "./outputs/post_training"
-    
-    # 数据配置
-    novel_data_dir: str = "./data/novels"
-    styles: List[str] = field(default_factory=lambda: ["仙侠", "武侠", "玄幻"])
-    max_samples_per_style: int = 100
-    data_augment_ratio: float = 0.3
-    use_context: bool = True  # 使用上下文
-    context_length: int = 200
-    
-    # SFT配置
-    sft_enabled: bool = True
-    sft_epochs: int = 3
-    sft_batch_size: int = 1
-    sft_learning_rate: float = 2e-4
-    sft_use_lora: bool = True
-    sft_lora_r: int = 8
-    sft_lora_alpha: int = 16
-    
-    # DPO配置
-    dpo_enabled: bool = True
-    dpo_epochs: int = 2
-    dpo_batch_size: int = 1
-    dpo_learning_rate: float = 1e-6
-    dpo_beta: float = 0.1
-    dpo_num_candidates: int = 2  # 每个prompt生成的候选数
-    
-    # 评估配置
-    eval_enabled: bool = True
-    eval_test_size: int = 100
-    eval_metrics: List[str] = field(default_factory=lambda: ["perplexity", "bleu", "diversity", "style"])
-    
-    # 实验配置
-    experiment_name: str = ""
-    seed: int = 42
-    use_wandb: bool = False
-    wandb_project: str = "novel-rag-post-training"
-    
-    # 硬件配置
-    device: str = "cuda"
-    fp16: bool = True
-    bf16: bool = False
-    gradient_checkpointing: bool = True
-    max_memory: Optional[Dict[int, str]] = None
-    
-    # 并行处理
-    parallel_workers: int = 4
-    
-    def __post_init__(self):
-        """后处理"""
-        if not self.experiment_name:
-            self.experiment_name = f"{self.project_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # 创建输出目录
-        self.experiment_dir = Path(self.output_dir) / self.experiment_name
-        self.experiment_dir.mkdir(parents=True, exist_ok=True)
-    
-    def save(self, path: Optional[str] = None):
-        """保存配置"""
-        save_path = path or self.experiment_dir / "config.yaml"
-        with open(save_path, 'w', encoding='utf-8') as f:
-            yaml.dump(asdict(self), f, allow_unicode=True, default_flow_style=False)
-        logger.info(f"配置已保存到: {save_path}")
-    
-    @classmethod
-    def load(cls, path: str):
-        """加载配置"""
-        with open(path, 'r', encoding='utf-8') as f:
-            config_dict = yaml.safe_load(f)
-        return cls(**config_dict)
-
-
+from config.config import SystemConfig
 # ========================================
 # 评估相关类
 # ========================================
@@ -164,14 +43,14 @@ class EvaluationMetrics:
 class ModelEvaluator:
     """模型评估器封装"""
     
-    def __init__(self, model_path: str, config: PostTrainingConfig):
+    def __init__(self, model_path: str, config: SystemConfig):
         self.model_path = model_path
         self.config = config
         
         # 延迟导入，避免循环依赖
         try:
             from .evaluator import NovelEvaluator
-            from src.config.config import SystemConfig
+            from config.config import SystemConfig
             
             sys_config = SystemConfig()
             self.evaluator = NovelEvaluator(sys_config)
@@ -378,21 +257,24 @@ def create_preference_data_from_sft(
 class PostTrainingPipeline:
     """后训练流程管理器"""
     
-    def __init__(self, config: PostTrainingConfig):
+    def __init__(self, config: SystemConfig):
         self.config = config
         self.results = {}
-        
-        # 初始化日志
-        self._setup_logging()
+         # 创建实验目录
+        self.experiment_dir = Path(self.config.training.output_dir) / self.config.post_training.experiment_name
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
         
         # 保存配置
         self.config.save()
+
+        # 初始化日志
+        self._setup_logging()
         
-        logger.info(f"初始化后训练流程: {self.config.experiment_name}")
+        logger.info(f"初始化后训练流程: {self.config.post_training.experiment_name}")
     
     def _setup_logging(self):
         """设置日志"""
-        log_file = self.config.experiment_dir / "training.log"
+        log_file = self.experiment_dir / "training.log"
         logger.add(
             log_file,
             rotation="10 MB",
@@ -408,23 +290,23 @@ class PostTrainingPipeline:
         
         try:
             # Step 1: 数据准备
-            if not (self.config.experiment_dir / "data").exists():
+            if not (self.experiment_dir / "data").exists():
                 logger.info("Step 1: 数据准备")
                 self._prepare_data()
             else:
                 logger.info("Step 1: 跳过数据准备（已存在）")
             
             # Step 2: SFT训练
-            if self.config.sft_enabled:
+            if self.config.post_training.sft_enabled:
                 logger.info("Step 2: SFT监督微调")
                 sft_model_path = self._run_sft()
                 self.results['sft_model'] = sft_model_path
             else:
                 logger.info("Step 2: 跳过SFT训练")
-                sft_model_path = self.config.base_model
+                sft_model_path = self.config.model.model_name_or_path
             
             # Step 3: DPO训练
-            if self.config.dpo_enabled:
+            if self.config.post_training.dpo_enabled:
                 logger.info("Step 3: DPO偏好优化")
                 dpo_model_path = self._run_dpo(sft_model_path)
                 self.results['dpo_model'] = dpo_model_path
@@ -433,7 +315,7 @@ class PostTrainingPipeline:
                 dpo_model_path = sft_model_path
             
             # Step 4: 评估
-            if self.config.eval_enabled:
+            if self.config.post_training.eval_enabled:
                 logger.info("Step 4: 模型评估")
                 eval_results = self._run_evaluation(dpo_model_path)
                 self.results['evaluation'] = eval_results
@@ -452,7 +334,7 @@ class PostTrainingPipeline:
     
     def run_with_checkpoint(self):
         """支持断点恢复的运行方法"""
-        checkpoint_file = self.config.experiment_dir / "checkpoint.json"
+        checkpoint_file = self.experiment_dir / "checkpoint.json"
         
         # 加载检查点
         if checkpoint_file.exists():
@@ -476,14 +358,14 @@ class PostTrainingPipeline:
                 
                 if step == "data":
                     self._prepare_data()
-                elif step == "sft" and self.config.sft_enabled:
+                elif step == "sft" and self.config.post_training.sft_enabled:
                     self.results['sft_model'] = self._run_sft()
-                elif step == "dpo" and self.config.dpo_enabled:
-                    sft_model = self.results.get('sft_model', self.config.base_model)
+                elif step == "dpo" and self.config.post_training.dpo_enabled:
+                    sft_model = self.results.get('sft_model', self.config.model.model_name_or_path)
                     self.results['dpo_model'] = self._run_dpo(sft_model)
-                elif step == "eval" and self.config.eval_enabled:
+                elif step == "eval" and self.config.post_training.eval_enabled:
                     model_path = self.results.get('dpo_model', 
-                                self.results.get('sft_model', self.config.base_model))
+                                self.results.get('sft_model', self.config.model.model_name_or_path))
                     self.results['evaluation'] = self._run_evaluation(model_path)
                 elif step == "report":
                     self._generate_final_report()
@@ -503,28 +385,27 @@ class PostTrainingPipeline:
             raise
     
     def _prepare_data(self):
-        """准备训练数据 - 使用ImprovedDataProcessor"""
+        """准备训练数据 """
         try:
             from .data_processor import ImprovedDataProcessor, TrainingExample
         except ImportError:
-            logger.warning("无法导入ImprovedDataProcessor，使用简化版本")
-            self._prepare_data_simple()
+            logger.warning("无法导入ImprovedDataProcessor")
             return
         
         # 创建配置文件
-        config_path = self.config.experiment_dir / "data_processor_config.yaml"
+        config_path = self.experiment_dir / "data_processor_config.yaml"
         
         # 写入数据处理器配置
         processor_config = {
             "processing_params": {
                 "target_chunk_length": 500,
-                "max_samples_per_novel": self.config.max_samples_per_style,
-                "use_context": self.config.use_context,
-                "context_length": self.config.context_length,
-                "parallel_workers": self.config.parallel_workers
+                "max_samples_per_novel": self.config.data.max_samples_per_novel,
+                "use_context": self.config.data.use_context,
+                "context_length": self.config.data.context_length,
+                "parallel_workers": self.config.post_training.parallel_workers
             },
             "augmentation_params": {
-                "augment_ratio": self.config.data_augment_ratio
+                "augment_ratio": self.config.data.data_augment_ratio
             },
             "quality_criteria": {  # 添加这个部分
             "min_length": 50,
@@ -550,7 +431,7 @@ class PostTrainingPipeline:
         # 使用改进版数据处理器
         data_processor = ImprovedDataProcessor(str(config_path))
         
-        data_dir = self.config.experiment_dir / "data"
+        data_dir = self.experiment_dir / "data"
         data_dir.mkdir(exist_ok=True)
         
         all_examples = []
@@ -559,7 +440,7 @@ class PostTrainingPipeline:
         for style in self.config.styles:
             logger.info(f"处理 {style} 风格小说...")
             
-            style_dir = Path(self.config.novel_data_dir) / style
+            style_dir = Path(self.config.data.novel_data_dir) / style
             if not style_dir.exists():
                 logger.warning(f"{style_dir} 不存在，跳过")
                 continue
@@ -576,8 +457,8 @@ class PostTrainingPipeline:
                 style_examples = data_processor.process_novels_parallel(
                     [str(f) for f in novel_files],
                     style,
-                    max_workers=self.config.parallel_workers,
-                    max_samples_per_novel=self.config.max_samples_per_style // max(len(novel_files), 1)
+                    max_workers=self.config.post_training.parallel_workers,
+                    max_samples_per_novel=self.config.data.max_samples_per_novel // max(len(novel_files), 1)
                 )
             else:
                 # 串行处理
@@ -586,8 +467,8 @@ class PostTrainingPipeline:
                     examples = data_processor.process_novel_to_training_data(
                         str(novel_file),
                         style,
-                        max_samples=self.config.max_samples_per_style // max(len(novel_files), 1),
-                        use_context=self.config.use_context
+                        max_samples=self.config.data.max_samples_per_novel // max(len(novel_files), 1),
+                        use_context=self.config.data.use_context
                     )
                     style_examples.extend(examples)
             
@@ -598,11 +479,11 @@ class PostTrainingPipeline:
             raise ValueError("没有提取到任何训练样本，请检查数据目录")
         
         # 数据增强
-        if self.config.data_augment_ratio > 0:
+        if self.config.data.data_augment_ratio > 0:
             logger.info("执行数据增强...")
             all_examples = data_processor.augment_data(
                 all_examples,
-                self.config.data_augment_ratio
+                self.config.data.data_augment_ratio
             )
         
         # 保存数据集
@@ -617,14 +498,14 @@ class PostTrainingPipeline:
             'total_samples': len(all_examples),
             'styles': self.config.styles,
             'with_context': sum(1 for ex in all_examples if ex.input),
-            'augmented': int(len(all_examples) * self.config.data_augment_ratio)
+            'augmented': int(len(all_examples) * self.config.data.data_augment_ratio)
         }
     
     def _prepare_data_simple(self):
         """简化的数据准备（后备方案）"""
         logger.info("使用简化的数据准备方法...")
         
-        data_dir = self.config.experiment_dir / "data"
+        data_dir = self.experiment_dir / "data"
         data_dir.mkdir(exist_ok=True)
         
         # 创建示例数据
@@ -632,7 +513,7 @@ class PostTrainingPipeline:
         val_data = []
         
         for style in self.config.styles:
-            for i in range(100):  # 每个风格100个样本
+            for i in range(1000):  # 每个风格100个样本
                 example = {
                     "instruction": f"创作一段{style}风格的小说内容",
                     "input": "",
@@ -667,20 +548,21 @@ class PostTrainingPipeline:
         os.environ['TRANSFORMERS_OFFLINE'] = '1'
         os.environ['HF_DATASETS_OFFLINE'] = '1'
 
-        sft_dir = self.config.experiment_dir / "sft"
+        sft_dir = self.experiment_dir / "sft"
         sft_dir.mkdir(exist_ok=True)
         
         try:
             from .sft_trainer import SFTTrainer
             from .data_processor import TrainingExample
+            import evaluator
         except ImportError as e:
             logger.error(f"无法导入SFT训练器: {e}")
-            return self.config.base_model
+            return self.config.model.local_model_path
         
         # 加载数据
-        with open(self.config.experiment_dir / "data" / "train.json", 'r', encoding='utf-8') as f:
+        with open(self.experiment_dir / "data" / "train.json", 'r', encoding='utf-8') as f:
             train_data = json.load(f)
-        with open(self.config.experiment_dir / "data" / "val.json", 'r', encoding='utf-8') as f:
+        with open(self.experiment_dir / "data" / "val.json", 'r', encoding='utf-8') as f:
             val_data = json.load(f)
         
         # 转换为TrainingExample
@@ -688,47 +570,10 @@ class PostTrainingPipeline:
         val_examples = [TrainingExample(**d) for d in val_data]
         
         # 创建SFT配置
-        '''from src.config.config import SystemConfig
-        sys_config = SystemConfig()
-        sys_config.model.base_model = self.config.base_model
-        sys_config.training.output_dir = str(sft_dir)
-        sys_config.training.num_train_epochs = self.config.sft_epochs
-        sys_config.training.per_device_train_batch_size = self.config.sft_batch_size
-        sys_config.training.learning_rate = self.config.sft_learning_rate
-        sys_config.lora.r = self.config.sft_lora_r
-        sys_config.lora.lora_alpha = self.config.sft_lora_alpha'''
-        
-        from src.config.config import SystemConfig, ModelConfig, TrainingConfig
-        logger.info("正在应用强制显存优化设置...")
+        logger.info("正在应用显存优化设置...")
 
-        sys_config = SystemConfig()
-        
-        # 1. 强制模型以 4-bit 量化加载
-        sys_config.model = ModelConfig(
-            model_name_or_path=self.config.base_model,
-            load_in_4bit=True,
-            trust_remote_code=True
-        )
-        logger.info("已强制启用 4-bit 模型量化。")
-
-        # 2. 强制使用极小的批次大小和大的梯度累积
-        sys_config.training = TrainingConfig(
-            output_dir=str(sft_dir),
-            num_train_epochs=self.config.sft_epochs,
-            per_device_train_batch_size=1,  # 强制批次大小为 1
-            gradient_accumulation_steps=16, # 强制梯度累积为 16 (有效批次大小仍为16)
-            learning_rate=self.config.sft_learning_rate,
-            fp16=True,
-            gradient_checkpointing=True, # 确保梯度检查点开启
-            optim="paged_adamw_8bit"     # 使用节省显存的优化器
-        )
-        logger.info("已强制设置 batch_size=1, gradient_accumulation_steps=16。")
-
-         #  LoRA 配置 
-        sys_config.lora.r = self.config.sft_lora_r
-        sys_config.lora.lora_alpha = self.config.sft_lora_alpha
         # 创建训练器
-        trainer = SFTTrainer(sys_config)
+        trainer = SFTTrainer(self.config)
         trainer.setup_model_and_tokenizer()
         
         # 准备数据集
@@ -738,12 +583,12 @@ class PostTrainingPipeline:
         trainer.train(train_dataset, val_dataset)
         
         # 评估
-        eval_metrics = trainer.evaluate(val_dataset)
+        eval_metrics = evaluator.evaluate_comprehensive(val_dataset)
         
         # 保存结果
         sft_results = {
             "eval_metrics": eval_metrics,
-            "config": asdict(sys_config)
+            "config": asdict(self.config)
         }
         
         with open(sft_dir / "results.json", 'w', encoding='utf-8') as f:
@@ -756,7 +601,7 @@ class PostTrainingPipeline:
     
     def _run_dpo(self, sft_model_path: str) -> str:
         """运行DPO训练"""
-        dpo_dir = self.config.experiment_dir / "dpo"
+        dpo_dir = self.experiment_dir / "dpo"
         dpo_dir.mkdir(exist_ok=True)
         
         # 生成偏好数据
@@ -765,7 +610,7 @@ class PostTrainingPipeline:
         
         if not preference_data_path.exists():
             # 加载训练数据获取prompts
-            with open(self.config.experiment_dir / "data" / "train.json", 'r', encoding='utf-8') as f:
+            with open(self.experiment_dir / "data" / "train.json", 'r', encoding='utf-8') as f:
                 train_data = json.load(f)
             
             prompts = [item['instruction'] for item in train_data[:500]]
@@ -773,11 +618,11 @@ class PostTrainingPipeline:
             # 生成偏好数据
             preference_data = create_preference_data_from_sft(
                 sft_model_path,
-                self.config.base_model,
+                self.config.model.local_model_path,
                 prompts,
                 str(preference_data_path),
                 num_samples=min(len(prompts), 500),
-                num_candidates=self.config.dpo_num_candidates
+                num_candidates=self.config.post_training.dpo_num_candidates
             )
         else:
             with open(preference_data_path, 'r', encoding='utf-8') as f:
@@ -804,18 +649,16 @@ class PostTrainingPipeline:
             return sft_model_path
         
         # 创建DPO配置
-        from src.config.config import SystemConfig
-        sys_config = SystemConfig()
-        sys_config.model.base_model = sft_model_path
-        sys_config.training.output_dir = str(dpo_dir)
-        sys_config.training.dpo_epochs = self.config.dpo_epochs
-        sys_config.training.dpo_batch_size = self.config.dpo_batch_size
-        sys_config.training.dpo_learning_rate = self.config.dpo_learning_rate
-        sys_config.training.dpo_beta = self.config.dpo_beta
-        sys_config.use_lora = True
+        self.config.model.local_model_path = sft_model_path
+        self.config.training.output_dir = str(dpo_dir)
+        self.config.training.dpo_epochs = self.config.post_training.dpo_epochs
+        self.config.training.dpo_batch_size = self.config.post_training.dpo_batch_size
+        self.config.training.dpo_learning_rate = self.config.post_training.dpo_learning_rate
+        self.config.training.dpo_beta = self.config.post_training.dpo_beta
+        self.config.model.use_lora = True
         
         # 创建DPO训练器
-        dpo_trainer = DPOTrainerClass(sys_config, sft_model_path)
+        dpo_trainer = DPOTrainerClass(self.config, sft_model_path)
         
         # 转换数据格式
         preference_examples = [PreferenceData(**d) for d in train_pref]
@@ -829,9 +672,9 @@ class PostTrainingPipeline:
         dpo_results = {
             "num_preference_pairs": len(preference_data),
             "config": {
-                "beta": self.config.dpo_beta,
-                "epochs": self.config.dpo_epochs,
-                "learning_rate": self.config.dpo_learning_rate
+                "beta": self.config.post_training.dpo_beta,
+                "epochs": self.config.post_training.dpo_epochs,
+                "learning_rate": self.config.post_training.dpo_learning_rate
             }
         }
         
@@ -843,17 +686,17 @@ class PostTrainingPipeline:
     
     def _run_evaluation(self, model_path: str) -> Dict[str, Any]:
         """运行评估"""
-        eval_dir = self.config.experiment_dir / "evaluation"
+        eval_dir = self.experiment_dir / "evaluation"
         eval_dir.mkdir(exist_ok=True)
         
         # 准备测试数据
         test_data = []
         
         # 从验证集中采样
-        with open(self.config.experiment_dir / "data" / "val.json", 'r', encoding='utf-8') as f:
+        with open(self.experiment_dir / "data" / "val.json", 'r', encoding='utf-8') as f:
             val_data = json.load(f)
         
-        for item in val_data[:self.config.eval_test_size]:
+        for item in val_data[:self.config.post_training.eval_test_size]:
             test_data.append({
                 "prompt": item['instruction'],
                 "reference": item['output'],
@@ -887,14 +730,14 @@ class PostTrainingPipeline:
         all_metrics['human_alignment'] = alignment_results
         
         # 3. 对比评估（如果有基线模型）
-        if self.config.sft_enabled and self.config.dpo_enabled:
+        if self.config.post_training.sft_enabled and self.config.post_training.dpo_enabled:
             logger.info("运行对比评估...")
             
             comparison = {}
             
             # 评估基础模型
             try:
-                base_evaluator = ModelEvaluator(self.config.base_model, self.config)
+                base_evaluator = ModelEvaluator(self.config.model.local_model_path, self.config)
                 base_metrics = base_evaluator.evaluate_comprehensive(test_data[:50], "混合")
                 comparison["base_model"] = base_metrics.to_dict()
             except Exception as e:
@@ -990,13 +833,13 @@ class PostTrainingPipeline:
     
     def _generate_final_report(self):
         """生成最终报告"""
-        report_path = self.config.experiment_dir / "final_report.md"
+        report_path = self.experiment_dir / "final_report.md"
         
         report = []
         report.append(f"# 后训练实验报告")
         report.append(f"\n## 实验信息")
-        report.append(f"- **实验名称**: {self.config.experiment_name}")
-        report.append(f"- **基础模型**: {self.config.base_model}")
+        report.append(f"- **实验名称**: {self.experiment_name}")
+        report.append(f"- **基础模型**: {self.config.model.model_name_or_path}")
         report.append(f"- **训练时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report.append(f"- **风格类型**: {', '.join(self.config.styles)}")
         
@@ -1014,21 +857,21 @@ class PostTrainingPipeline:
         # 训练配置
         report.append(f"\n## 训练配置")
         report.append(f"\n### SFT配置")
-        report.append(f"- **启用**: {self.config.sft_enabled}")
+        report.append(f"- **启用**: {self.config.post_training.sft_enabled}")
         if self.config.sft_enabled:
-            report.append(f"- **Epochs**: {self.config.sft_epochs}")
-            report.append(f"- **Batch Size**: {self.config.sft_batch_size}")
-            report.append(f"- **Learning Rate**: {self.config.sft_learning_rate}")
-            report.append(f"- **LoRA**: {self.config.sft_use_lora} (r={self.config.sft_lora_r}, alpha={self.config.sft_lora_alpha})")
+            report.append(f"- **Epochs**: {self.config.post_training.sft_epochs}")
+            report.append(f"- **Batch Size**: {self.config.post_training.sft_batch_size}")
+            report.append(f"- **Learning Rate**: {self.config.training.learning_rate}")
+            report.append(f"- **LoRA**: {self.config.lora.r} (r={self.config.lora.r}, alpha={self.config.lora.lora_alpha})")
         
         report.append(f"\n### DPO配置")
-        report.append(f"- **启用**: {self.config.dpo_enabled}")
-        if self.config.dpo_enabled:
-            report.append(f"- **Epochs**: {self.config.dpo_epochs}")
-            report.append(f"- **Batch Size**: {self.config.dpo_batch_size}")
-            report.append(f"- **Learning Rate**: {self.config.dpo_learning_rate}")
-            report.append(f"- **Beta**: {self.config.dpo_beta}")
-            report.append(f"- **候选数量**: {self.config.dpo_num_candidates}")
+        report.append(f"- **启用**: {self.config.post_training.dpo_enabled}")
+        if self.config.post_training.dpo_enabled:
+            report.append(f"- **Epochs**: {self.config.post_training.dpo_epochs}")
+            report.append(f"- **Batch Size**: {self.config.post_training.dpo_batch_size}")
+            report.append(f"- **Learning Rate**: {self.config.post_training.dpo_learning_rate}")
+            report.append(f"- **Beta**: {self.config.post_training.dpo_beta}")
+            report.append(f"- **候选数量**: {self.config.post_training.dpo_num_candidates}")
         
         # 评估结果
         if 'evaluation' in self.results:
@@ -1085,7 +928,7 @@ class PostTrainingPipeline:
             report.append(f"- **SFT模型**: `{self.results['sft_model']}`")
         if 'dpo_model' in self.results:
             report.append(f"- **DPO模型**: `{self.results['dpo_model']}`")
-        report.append(f"- **实验目录**: `{self.config.experiment_dir}`")
+        report.append(f"- **实验目录**: `{self.experiment_dir}`")
         
         # 结论
         report.append(f"\n## 结论")
@@ -1121,7 +964,7 @@ class PostTrainingPipeline:
             f.write('\n'.join(report))
         
         # 同时保存JSON格式的结果
-        results_path = self.config.experiment_dir / "results.json"
+        results_path = self.experiment_dir / "results.json"
         with open(results_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, ensure_ascii=False, indent=2)
         
@@ -1141,16 +984,16 @@ class PostTrainingPipeline:
         for step in step_order[start_index:]:
             if step == "data":
                 self._prepare_data()
-            elif step == "sft" and self.config.sft_enabled:
+            elif step == "sft" and self.config.post_training.sft_enabled:
                 sft_model_path = self._run_sft()
                 self.results['sft_model'] = sft_model_path
-            elif step == "dpo" and self.config.dpo_enabled:
-                sft_path = self.results.get('sft_model', self.config.base_model)
+            elif step == "dpo" and self.config.post_training.dpo_enabled:
+                sft_path = self.results.get('sft_model', self.config.model.local_model_path)
                 dpo_model_path = self._run_dpo(sft_path)
                 self.results['dpo_model'] = dpo_model_path
-            elif step == "eval" and self.config.eval_enabled:
+            elif step == "eval" and self.config.post_training.eval_enabled:
                 model_path = self.results.get('dpo_model', 
-                            self.results.get('sft_model', self.config.base_model))
+                            self.results.get('sft_model', self.config.model.local_model_path))
                 eval_results = self._run_evaluation(model_path)
                 self.results['evaluation'] = eval_results
             elif step == "report":
@@ -1187,11 +1030,11 @@ def main():
     # 加载或创建配置
     if args.config:
         logger.info(f"从配置文件加载: {args.config}")
-        config = PostTrainingConfig.load(args.config)
+        config = SystemConfig.load(args.config)
     else:
-        config = PostTrainingConfig(
+        config = SystemConfig(
             project_name="novel_rag_training",
-            base_model=args.model or "Qwen/Qwen2.5-3B-Instruct",
+            base_model=args.model or "Qwen/Qwen2.5-0.5B-Instruct",
             novel_data_dir="./data/novels",
             styles=args.styles or ["仙侠", "武侠", "玄幻"],
             output_dir=args.output or "./outputs/post_training",

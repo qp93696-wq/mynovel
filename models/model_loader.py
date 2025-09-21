@@ -138,7 +138,8 @@ class ModelLoader:
             # 加载模型
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name_or_path,
-                **model_kwargs
+                **model_kwargs,
+                max_memory={0:"7GB","cpu":"15GB"},
             )
             
             # 如果不使用device_map="auto"，手动移动到设备

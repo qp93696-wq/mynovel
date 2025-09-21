@@ -154,7 +154,7 @@ class NovelRAGCLI:
             else:
                 config = PostTrainingConfig(
                     project_name=args.project or "novel_rag_training",
-                    base_model=args.model or self.config.model.model_name_or_path,
+                    base_model=r"D:\Project\novel\models\transformers_cache\models_Qwen_Qwen2.5-0.5B-Instruct",
                     novel_data_dir=args.data_dir or "./data/novels",
                     styles=args.styles or ["仙侠", "武侠", "玄幻"],
                     max_samples_per_style=args.max_samples or 1000,

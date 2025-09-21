@@ -386,18 +386,18 @@ class ImprovedDataProcessor:
             scores["punctuation"] = 1.0
         
         # 对话评分
-        dialogue_markers = ['说道', '道：', '问道', '笑道', '冷道', '喝道']
+        dialogue_markers = ['说道', '道：', '问道','说：','言','开口','告诉','回答','谈','称','讲','表示']
         dialogue_count = sum(text.count(marker) for marker in dialogue_markers)
         scores["dialogue"] = min(1.0, 0.7 + dialogue_count * 0.1)
-        
+
         # 风格关键词评分
         style_keywords = []
         for template in self.config.style_templates.get(style, []):
             style_keywords.extend(template.get("keywords", []))
-        
+
         keyword_count = sum(text.count(kw) for kw in style_keywords)
         scores["keywords"] = min(1.0, 0.6 + keyword_count * 0.1)
-        
+
         # 句子多样性评分
         sentences = re.split(r'[。！？]', text)
         if len(sentences) > 1:
@@ -406,44 +406,44 @@ class ImprovedDataProcessor:
             scores["sentence_variety"] = min(1.0, 0.5 + length_variance / 20)
         else:
             scores["sentence_variety"] = 0.5
-        
+
         # 重复性检测
         if self._has_repetition(text):
             scores["repetition"] = 0.3
         else:
-            scores["repetition"] = 1.0
-        
+            scores["repetition"] = 1.2
+
         # 加权计算最终分数
         final_score = 0
         total_weight = 0
-        
+
         for key, score in scores.items():
             weight = weights.get(key, 1.0 / len(scores))
             final_score += score * weight
             total_weight += weight
-        
+
         if total_weight > 0:
             final_score /= total_weight
-        
+
         return final_score
 
     def _evaluate_text_quality_model(self, text: str) -> float:
         """使用模型评估文本质量"""
         if not self.quality_evaluator:
             return 0.5
-        
+
         tokenizer = self.quality_evaluator["tokenizer"]
         model = self.quality_evaluator["model"]
-        
+
         # 编码文本
         inputs = tokenizer(text, truncation=True, max_length=512, return_tensors="pt")
-        
+
         # 获取模型预测
         with torch.no_grad():
             outputs = model(**inputs)
             # 假设模型输出是质量分数的logits
             score = torch.sigmoid(outputs.logits[0, 0]).item()
-        
+
         return score
 
     def create_preference_data_batch(
@@ -452,12 +452,12 @@ class ImprovedDataProcessor:
             model,
             tokenizer,
             max_preference_pairs: int = 100,
-            batch_size: int = 4,
+            batch_size: int = 1,
             num_candidates: int = 4
     ) -> List[PreferenceData]:
         """
         批量创建偏好数据
-        
+
         Args:
             examples: 训练样本列表
             model: 生成模型
@@ -467,47 +467,47 @@ class ImprovedDataProcessor:
             num_candidates: 每个prompt生成的候选数量
         """
         preference_data = []
-        
+
         # 限制处理数量
         examples_to_process = examples[:max_preference_pairs]
-        
+
         logger.info(f"开始批量生成偏好数据，共 {len(examples_to_process)} 个样本")
-        
+
         # 批量处理
         for i in tqdm(range(0, len(examples_to_process), batch_size), desc="生成偏好对"):
             batch_examples = examples_to_process[i:i + batch_size]
-            
+
             # 准备批量prompts
             prompts = [ex.to_prompt() for ex in batch_examples]
-            
+
             # 批量生成候选
             try:
                 all_candidates = self._batch_generate_texts(
-                    model, tokenizer, prompts, 
+                    model, tokenizer, prompts,
                     num_return_sequences=num_candidates,
                     max_length=512
                 )
-                
+
                 # 处理每个样本的候选
                 for j, example in enumerate(batch_examples):
                     candidates = all_candidates[j * num_candidates:(j + 1) * num_candidates]
-                    
+
                     # 评估候选质量
                     scored_candidates = []
                     for candidate in candidates:
                         quality = self._evaluate_text_quality_enhanced(candidate, example.style)
                         scored_candidates.append((candidate, quality))
-                    
+
                     # 添加原始输出
                     scored_candidates.append((example.output, example.quality_score))
-                    
+
                     # 排序并选择最好和最差的
                     scored_candidates.sort(key=lambda x: x[1], reverse=True)
-                    
+
                     if len(scored_candidates) >= 2:
                         chosen = scored_candidates[0][0]
                         rejected = scored_candidates[-1][0]
-                        
+
                         if chosen != rejected:
                             preference_data.append(PreferenceData(
                                 prompt=prompts[j],
@@ -518,11 +518,11 @@ class ImprovedDataProcessor:
                                 rejected_score=scored_candidates[-1][1],
                                 metadata=example.metadata
                             ))
-                            
+
             except Exception as e:
                 logger.warning(f"批次生成失败: {e}")
                 continue
-        
+
         logger.info(f"生成了 {len(preference_data)} 个偏好对")
         return preference_data
 
@@ -536,7 +536,7 @@ class ImprovedDataProcessor:
     ) -> List[str]:
         """
         批量生成文本 (性能优化版)
-        
+
         一次调用 model.generate 生成所有候选，以最大化GPU效率
         """
         # 批量编码
@@ -547,9 +547,9 @@ class ImprovedDataProcessor:
             max_length=512,
             padding=True
         )
-        
+
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        
+
         with torch.no_grad():
             # 一次性生成所有候选！
             outputs = model.generate(
@@ -567,14 +567,14 @@ class ImprovedDataProcessor:
                 diversity_penalty=0.5 if hasattr(model.config, 'diversity_penalty') else 0.0,
                 repetition_penalty=1.1
             )
-        
+
         # 批量解码
         # outputs shape: [batch_size * num_return_sequences, sequence_length]
         generated_texts = tokenizer.batch_decode(
-            outputs[:, inputs['input_ids'].shape[1]:], 
+            outputs[:, inputs['input_ids'].shape[1]:],
             skip_special_tokens=True
         )
-        
+
         return generated_texts
 
     def _smart_split_text(self, text: str, target_length: int = 500) -> List[str]:
@@ -627,7 +627,6 @@ class ImprovedDataProcessor:
         return chunks
 
 
-    # 在 ImprovedDataProcessor 类中添加（约第600行后）
 
     def process_novels_parallel(
         self,
@@ -638,7 +637,7 @@ class ImprovedDataProcessor:
     ) -> List[TrainingExample]:
         """
         并行处理多个小说文件
-        
+
         Args:
             novel_paths: 小说文件路径列表
             styles: 风格（字符串、列表或路径到风格的映射）
@@ -646,7 +645,7 @@ class ImprovedDataProcessor:
             max_samples_per_novel: 每本小说的最大样本数
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        
+
         # 处理风格参数
         if isinstance(styles, str):
             style_map = {path: styles for path in novel_paths}
@@ -654,12 +653,12 @@ class ImprovedDataProcessor:
             style_map = dict(zip(novel_paths, styles))
         else:
             style_map = styles
-        
+
         # 设置工作线程数
         max_workers = max_workers or self.config.processing_params.get("parallel_workers", 4)
-        
+
         all_examples = []
-        
+
         # 使用线程池并行处理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
@@ -672,7 +671,7 @@ class ImprovedDataProcessor:
                 ): novel_path
                 for novel_path in novel_paths
             }
-            
+
             # 显示进度条
             with tqdm(total=len(novel_paths), desc="处理小说") as pbar:
                 for future in as_completed(future_to_novel):
@@ -685,7 +684,7 @@ class ImprovedDataProcessor:
                         logger.error(f"处理失败 {novel_path}: {e}")
                     finally:
                         pbar.update(1)
-        
+
         logger.success(f"并行处理完成，共获得 {len(all_examples)} 个训练样本")
         return all_examples
 
@@ -708,7 +707,7 @@ class ImprovedDataProcessor:
         """根据文本内容选择合适的指令"""
         if not templates:
             return {"instruction": "创作一段小说内容", "keywords": []}
-        
+
         # 提取文本关键词
         text_keywords = jieba.analyse.extract_tags(text, topK=10)
 
@@ -735,9 +734,9 @@ class ImprovedDataProcessor:
 
     def _detect_text_type(self, text: str) -> str:
         """检测文本类型"""
-        if any(marker in text for marker in ['说道', '道：', '问道']):
+        if any(marker in text for marker in ['说道', '道：', '问道','说：','言','开口','告诉','回答','谈','称','讲','表示']):
             return "dialogue"
-        elif any(marker in text for marker in ['突然', '忽然', '猛地', '一声']):
+        elif any(marker in text for marker in ['突然', '忽然', '猛地', '一声','随即','立刻','正要','倏地','渐渐地','飞快地','奋力','悄悄地','奋力']):
             return "action"
         elif len(text) > 200 and '的' in text and '了' in text:
             return "description"
@@ -748,18 +747,18 @@ class ImprovedDataProcessor:
         """清理文本"""
         # 1. 标准化换行
         text = re.sub(r'\n\s*\n', '\n\n', text)
-        
+
         # 2. 移除段落首尾空白
         paragraphs = text.split('\n\n')
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         text = '\n\n'.join(paragraphs)
-        
+
         # 3. 移除多余空格
         text = re.sub(r'[ \t]+', ' ', text)
-        
+
         # 4. 移除特殊字符
         text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\n\s，。！？；：""''（）《》【】…—～·]', '', text)
-        
+
         return text.strip()
 
     # 保留原有的其他方法...
@@ -777,7 +776,7 @@ class ImprovedDataProcessor:
 
             if random.random() < augment_ratio:
                 aug_params = self.config.augmentation_params
-                
+
                 if random.random() < aug_params.get("instruction_rewrite_prob", 0.5):
                     augmented.append(self._augment_instruction(example))
 
@@ -818,7 +817,7 @@ class ImprovedDataProcessor:
         """截断输出用于续写训练"""
         truncate_point = random.randint(100, len(example.output) - 50)
         text = example.output[:truncate_point]
-        
+
         last_period = max(text.rfind('。'), text.rfind('！'), text.rfind('？'))
         if last_period > 50:
             text = text[:last_period + 1]
@@ -855,7 +854,7 @@ class ImprovedDataProcessor:
             self,
             examples: List[TrainingExample],
             save_path: str,
-            split_ratio: float = 0.9
+            split_ratio: float = 0.95
     ):
         """保存数据集"""
         save_path = Path(save_path)
